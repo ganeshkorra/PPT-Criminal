@@ -291,6 +291,7 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
         const anchor = menuTrans.anchorPoint;
         const contentCenterX = width * (0.5 - anchor.x);
         const contentCenterY = height * (0.5 - anchor.y);
+        const itemLayoutY = contentCenterY - 58;
         let cursorX = -itemsWidth / 2;
         visibleItems.forEach(item => {
             const visual = this.menuItemVisuals.get(item) || item;
@@ -298,10 +299,10 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
             const visualScale = this.menuItemVisualScales.get(item) || visual.scale;
             const visualWidth = visualTrans ? visualTrans.contentSize.width * Math.abs(visualScale.x) : 120;
             const visualX = contentCenterX + cursorX + visualWidth / 2;
-            visual.setPosition(v3(visualX, contentCenterY, 0));
+            visual.setPosition(v3(visualX, itemLayoutY, 0));
 
             const offset = this.menuItemVisualOffsets.get(item) || v3(0, 0, 0);
-            item.setPosition(v3(visualX + offset.x, contentCenterY + offset.y, 0));
+            item.setPosition(v3(visualX + offset.x, itemLayoutY + offset.y, 0));
             item.setSiblingIndex(visual.getSiblingIndex() + 1);
             cursorX += visualWidth + itemGap;
         });
