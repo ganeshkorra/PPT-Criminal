@@ -25,6 +25,9 @@ export class GridController extends Component {
     @property(Node)
     ctaEndScreen: Node = null!;
 
+    @property(Node)
+    introContainer: Node = null!;
+
     @property(String)
     correctItemName: string = "";
 
@@ -78,6 +81,10 @@ export class GridController extends Component {
     private static remainingTime: number = 60;
     private static isTimerStarted: boolean = false;
     private static isGameOver: boolean = false;
+    private static isIntroPlaying: boolean = false;
+    private static hasIntroPlayed: boolean = false;
+    private static hasStartupProcessed: boolean = false;
+    private static hasGameStarted: boolean = false;
 
     private static idleTimer: number = 0;
     private static isHandShowing: boolean = false;
@@ -328,6 +335,23 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
         if (GridController.allBoxes.length === 0) {
             GridController.completedItemNames.clear();
             GridController.completedMenuItemKeys.clear();
+            GridController.currentMistakes = 0;
+            GridController.matchesMade = 0;
+            GridController.activeBox = null;
+            GridController.timerMaster = null;
+            GridController.remainingTime = 60;
+            GridController.isTimerStarted = false;
+            GridController.isGameOver = false;
+            GridController.isIntroPlaying = false;
+            GridController.hasIntroPlayed = false;
+            GridController.hasGameStarted = false;
+            GridController.idleTimer = 0;
+            GridController.isHandShowing = false;
+            GridController.hasShownFirstTapHand = false;
+            GridController.globalUserTapCount = 0;
+            GridController.hasPassed25 = false;
+            GridController.hasPassed50 = false;
+            GridController.hasPassed75 = false;
             if (Analytics.instance) {
                 // 1. Fire LOADED first to signal assets are ready
                 Analytics.instance.dispatchEvent(analyticsEvents.LOADED);
@@ -382,9 +406,11 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
             this.decorationNode.active = false;
         }
 
+        const isFirstBox = GridController.allBoxes.length === 0;
         GridController.allBoxes.push(this);
-        if (GridController.allBoxes.length === 1) {
-            this.scheduleOnce(() => this.runEntrySequence(), 0.5);
+        if (isFirstBox && !GridController.hasStartupProcessed) {
+            GridController.hasStartupProcessed = true;
+            this.scheduleOnce(() => this.performStartupSequence(), 0);
         }
         if (GridController.timerMaster === null) GridController.timerMaster = this;
         if (this.ctaEndScreen) {
@@ -410,6 +436,11 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
         }
         if (this.selectionMenu) this.selectionMenu.active = false;
         if (this.decorationNode) this.decorationNode.active = false;
+        if (this.introContainer && !GridController.isIntroPlaying) {
+            this.introContainer.active = false;
+            const introOpacity = this.introContainer.getComponent(UIOpacity);
+            if (introOpacity) introOpacity.opacity = 0;
+        }
         if (this.handNode) {
             GridController.initialHandScale = this.handNode.scale.clone();
             this.handNode.active = false;
@@ -493,6 +524,84 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
         }
     }, totalTime);
 }
+
+    private showIntroSequence() {
+        if (!this.introContainer) return;
+
+        GridController.isIntroPlaying = true;
+        this.introContainer.active = true;
+        Tween.stopAllByTarget(this.introContainer);
+
+        let introOpacity = this.introContainer.getComponent(UIOpacity);
+        if (!introOpacity) {
+            introOpacity = this.introContainer.addComponent(UIOpacity);
+        }
+        introOpacity.opacity = 0;
+
+        this.introContainer.setScale(v3(0.8, 0.8, 0.8));
+
+        GridController.hasIntroPlayed = true;
+        const introTween = tween(this.introContainer)
+            .to(0.6, { scale: v3(1, 1, 1) }, { easing: 'backOut' });
+
+        tween(introOpacity)
+            .to(0.6, { opacity: 255 }, { easing: 'linear' })
+            .start();
+
+        introTween.call(() => {
+            this.scheduleOnce(() => this.hideIntroAndStartGame(), 3.0);
+        }).start();
+    }
+
+    private hideIntroAndStartGame() {
+        if (!this.introContainer) {
+            GridController.isIntroPlaying = false;
+            this.startGameplay();
+            return;
+        }
+
+        Tween.stopAllByTarget(this.introContainer);
+        const introOpacity = this.introContainer.getComponent(UIOpacity);
+
+        const hideTween = tween(this.introContainer)
+            .to(0.35, { scale: v3(0.8, 0.8, 0.8) }, { easing: 'sineIn' });
+
+        if (introOpacity) {
+            tween(introOpacity)
+                .to(0.35, { opacity: 0 }, { easing: 'linear' })
+                .start();
+        }
+
+        hideTween.call(() => {
+            this.introContainer.active = false;
+            if (introOpacity) {
+                introOpacity.opacity = 0;
+            }
+            GridController.isIntroPlaying = false;
+            this.startGameplay();
+        }).start();
+    }
+
+    private performStartupSequence() {
+        if (GridController.hasIntroPlayed || GridController.isIntroPlaying) {
+            return;
+        }
+
+        const introOwner = GridController.allBoxes.find(box => box.introContainer && box.introContainer.isValid);
+        if (introOwner && introOwner.introContainer) {
+            introOwner.showIntroSequence();
+            return;
+        }
+
+        this.startGameplay();
+    }
+
+    private startGameplay() {
+        if (GridController.isIntroPlaying || GridController.hasGameStarted) return;
+        GridController.hasGameStarted = true;
+        this.runEntrySequence();
+    }
+
     private showInitialTutorial() {
         if (GridController.isGameOver || GridController.isTimerStarted) return;
 
@@ -831,8 +940,8 @@ private manualStitchArc(g: Graphics, cx: number, cy: number, r: number, startDeg
     }
 
     onGridCellClicked(event: Event) {
-        if (GridController.isGameOver || this.isSolved) return;
-          // --- NEW: Track User Taps ---
+        if (GridController.isIntroPlaying || GridController.isGameOver || this.isSolved) return;
+        // --- NEW: Track User Taps ---
         this.checkTapProgress();
 
         if (!GridController.isChallengeStarted) {
@@ -990,7 +1099,7 @@ private manualStitchArc(g: Graphics, cx: number, cy: number, r: number, startDeg
     }
 
     onMenuItemClicked(event: Event) {
-        if (GridController.isGameOver) return;
+        if (GridController.isIntroPlaying || GridController.isGameOver) return;
         event.propagationStopped = true;
         this.checkTapProgress(); 
 
