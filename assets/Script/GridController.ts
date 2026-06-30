@@ -1558,6 +1558,7 @@ private executeVoiceCall() {
     }
 
     private triggerGameEndCTA(reason: string) {
+        const delay = reason === "WIN" ? 2.0 : 0.15;
         this.scheduleOnce(() => {
             const endScreen = GridController.globalCtaEndScreen || this.ctaEndScreen || director.getScene()?.getChildByPath("Canvas/CTA");
 
@@ -1576,7 +1577,7 @@ private executeVoiceCall() {
                     ctaHandler.onStoreButtonClicked();
                 }
             }
-        }, 0.15);
+        }, delay);
     }
 
     public closeSelectionMenu() {
