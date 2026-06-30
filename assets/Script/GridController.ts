@@ -279,9 +279,13 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
             maxItemHeight = Math.max(maxItemHeight, visualHeight);
         });
 
-        const minWidth = visibleItems.length === 1 ? 150 : visibleItems.length === 2 ? 300 : 450;
+        const dynamicMinWidth = visibleItems.length === 1 ? 150 : visibleItems.length === 2 ? 300 : 450;
+        const authoredWidth = this.originalSelectionMenuSize.width || menuTrans.contentSize.width;
+        const authoredHeight = this.originalSelectionMenuSize.height || menuTrans.contentSize.height;
+        const minWidth = visibleItems.length >= 3 ? Math.max(dynamicMinWidth, authoredWidth) : dynamicMinWidth;
         const width = Math.max(minWidth, itemsWidth + horizontalPadding);
-        const height = Math.max(358, maxItemHeight + verticalPadding);
+        const minHeight = visibleItems.length >= 3 ? Math.max(358, authoredHeight) : 358;
+        const height = Math.max(minHeight, maxItemHeight + verticalPadding);
         menuTrans.setContentSize(width, height);
 
         const anchor = menuTrans.anchorPoint;
@@ -975,7 +979,7 @@ private manualStitchArc(g: Graphics, cx: number, cy: number, r: number, startDeg
             GridController.isHandShowing = true;
             hand.active = true;
             hand.setSiblingIndex(999);
-            hand.setWorldPosition(v3(targetItem.worldPosition.x + 10, targetItem.worldPosition.y - 50, 0));
+            hand.setWorldPosition(v3(targetItem.worldPosition.x + 30, targetItem.worldPosition.y - 80, 0));
             hand.setScale(v3(0, 0, 0));
             tween(hand).to(0.2, { scale: GridController.initialHandScale }, { easing: 'backOut' }).call(() => this.playHandAnimation()).start();
             Tween.stopAllByTarget(targetItem);
