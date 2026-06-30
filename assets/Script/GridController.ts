@@ -1558,7 +1558,7 @@ private executeVoiceCall() {
     }
 
     private triggerGameEndCTA(reason: string) {
-        const delay = reason === "WIN" ? 2.0 : 0.15;
+        const delay = reason === "WIN" ? 1.3 : 0.15;
         this.scheduleOnce(() => {
             const endScreen = GridController.globalCtaEndScreen || this.ctaEndScreen || director.getScene()?.getChildByPath("Canvas/CTA");
 
@@ -1698,7 +1698,7 @@ private repositionHints(skipOpacityFade: Set<Node> = new Set(), onComplete?: Fun
     
     const MAX_WIDTH = 780; 
     const gapX = 25; // Slightly increased for breathing room
-    const gapY = 30;
+    const gapY = 20;
     let rows: Node[][] = [[]]; 
     let rowWidths: number[] = [0];
 
@@ -1719,7 +1719,7 @@ private repositionHints(skipOpacityFade: Set<Node> = new Set(), onComplete?: Fun
     });
 
     // --- ANIMATION EXECUTION ---
-    let currentY = 0;
+    let currentY = 10;
     let pendingMoves = activeHints.length;
     const finishMove = () => {
         pendingMoves--;
