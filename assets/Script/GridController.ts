@@ -99,6 +99,8 @@ export class GridController extends Component {
     private static hintOriginalScales: Map<Node, Vec3> = new Map();
     private static completedItemNames: Set<string> = new Set();
     private static completedMenuItemKeys: Set<string> = new Set();
+    private static completedColumnCounts: Map<string, number> = new Map();
+    private static completedColumnDecorations: Set<string> = new Set();
 
     @property(AudioClip) bgmClip: AudioClip = null!;
     @property(AudioClip) clickBoxClip: AudioClip = null!;
@@ -224,6 +226,32 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
         return `${groupKey}::${itemKey}`;
     }
 
+    private getColumnKey(): string {
+        const localX = this.node.position ? this.node.position.x : this.node.worldPosition.x;
+        const snappedX = Math.round(localX / 50) * 50;
+        return `${snappedX}`;
+    }
+
+    private static incrementColumnCompletion(columnKey: string): number {
+        const current = GridController.completedColumnCounts.get(columnKey) || 0;
+        const next = current + 1;
+        GridController.completedColumnCounts.set(columnKey, next);
+        return next;
+    }
+
+    private showColumnCompletionDecoration(columnKey: string) {
+        const solvedBoxes = GridController.allBoxes.filter(box => box.isSolved && box.getColumnKey() === columnKey);
+        solvedBoxes.forEach(box => {
+            if (!box.decorationNode) return;
+            Tween.stopAllByTarget(box.decorationNode);
+            box.decorationNode.active = true;
+            const decTrans = box.decorationNode.getComponent(UITransform);
+            if (decTrans) decTrans.setContentSize(box.decorOriginalSize.width, box.decorOriginalSize.height);
+            box.decorationNode.setScale(v3(0, 0, 0));
+            tween(box.decorationNode).to(0.4, { scale: box.decorOriginalScale }, { easing: 'backOut' }).start();
+        });
+    }
+
     private isMenuItemCompleted(item: Node): boolean {
         const itemKey = this.getMenuItemCompletionKey(item);
         if (itemKey && GridController.completedMenuItemKeys.has(itemKey)) return true;
@@ -335,6 +363,8 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
         if (GridController.allBoxes.length === 0) {
             GridController.completedItemNames.clear();
             GridController.completedMenuItemKeys.clear();
+            GridController.completedColumnCounts.clear();
+            GridController.completedColumnDecorations.clear();
             GridController.currentMistakes = 0;
             GridController.matchesMade = 0;
             GridController.activeBox = null;
@@ -1200,12 +1230,11 @@ private manualStitchArc(g: Graphics, cx: number, cy: number, r: number, startDeg
             this.hideSelectedFrame();
             this.isSolved = true;
             flyNode.name = "PlacedItem";
-            if (this.decorationNode) {
-                this.decorationNode.active = true;
-                const decTrans = this.decorationNode.getComponent(UITransform);
-                if (decTrans) decTrans.setContentSize(this.decorOriginalSize.width, this.decorOriginalSize.height);
-                this.decorationNode.setScale(v3(0, 0, 0));
-                tween(this.decorationNode).to(0.4, { scale: this.decorOriginalScale }, { easing: 'backOut' }).start();
+            const columnKey = this.getColumnKey();
+            const solvedCount = GridController.incrementColumnCompletion(columnKey);
+            if (solvedCount === 2 && !GridController.completedColumnDecorations.has(columnKey)) {
+                GridController.completedColumnDecorations.add(columnKey);
+                this.showColumnCompletionDecoration(columnKey);
             }
             this.playBurst();
             // Start rotation effect at the grid box location and keep it running
