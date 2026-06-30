@@ -150,6 +150,9 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
     private decorOriginalScale: Vec3 = v3(1, 1, 1);
     private decorOriginalSize: { width: number, height: number } = { width: 0, height: 0 };
     private menuItemScales: Map<string, Vec3> = new Map();
+    private menuItemVisuals: Map<Node, Node> = new Map();
+    private menuItemVisualOffsets: Map<Node, Vec3> = new Map();
+    private menuItemVisualScales: Map<Node, Vec3> = new Map();
     private menuDesignScale: Vec3 = v3(1, 1, 1);
     private targetScale: Vec3 = v3(1, 1, 1);
     private targetSize: { width: number, height: number } = { width: 0, height: 0 };
@@ -168,11 +171,42 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
     private getSelectionMenuGroupKey(): string {
         if (!this.selectionMenu) return "";
 
-        return this.selectionMenu.children
+        return this.getSelectionMenuItems()
             .map(item => this.getSpriteKey(this.getItemSpriteFrame(item)))
             .filter(key => key.length > 0)
             .sort()
             .join("|");
+    }
+
+    private getSelectionMenuItems(): Node[] {
+        if (!this.selectionMenu) return [];
+
+        return this.selectionMenu.children.filter(item => !!item.getComponent(Button));
+    }
+
+    private cacheSelectionMenuVisuals() {
+        if (!this.selectionMenu) return;
+
+        this.menuItemVisuals.clear();
+        this.menuItemVisualOffsets.clear();
+        this.menuItemVisualScales.clear();
+
+        let pendingVisual: Node | null = null;
+        this.selectionMenu.children.forEach(child => {
+            if (child.getComponent(Button)) {
+                if (pendingVisual) {
+                    this.menuItemVisuals.set(child, pendingVisual);
+                    this.menuItemVisualOffsets.set(child, child.position.clone().subtract(pendingVisual.position));
+                    this.menuItemVisualScales.set(child, pendingVisual.scale.clone());
+                    pendingVisual = null;
+                }
+                return;
+            }
+
+            if (child.getComponent(UITransform) && !child.getComponent(ProgressBar)) {
+                pendingVisual = child;
+            }
+        });
     }
 
     private getMenuItemCompletionKey(item: Node): string {
@@ -193,12 +227,19 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
         if (!this.selectionMenu) return;
 
         const visibleItems: Node[] = [];
-        this.selectionMenu.children.forEach(item => {
+        this.getSelectionMenuItems().forEach(item => {
             const isCompleted = this.isMenuItemCompleted(item);
             const savedScale = this.menuItemScales.get(item.name) || item.scale.clone();
             Tween.stopAllByTarget(item);
             item.active = !isCompleted;
             item.setScale(savedScale);
+
+            const visual = this.menuItemVisuals.get(item);
+            if (visual) {
+                Tween.stopAllByTarget(visual);
+                visual.active = !isCompleted;
+                visual.setScale(this.menuItemVisualScales.get(item) || visual.scale);
+            }
 
             const button = item.getComponent(Button);
             if (button) button.interactable = !isCompleted;
@@ -222,24 +263,25 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
         const menuTrans = this.selectionMenu.getComponent(UITransform);
         if (!menuTrans) return;
 
-        const itemGap = 62;
-        const horizontalPadding = 52;
-        const verticalPadding = 44;
+        const itemGap = 14;
+        const horizontalPadding = 28;
+        const verticalPadding = 24;
         let itemsWidth = 0;
         let maxItemHeight = 0;
 
         visibleItems.forEach((item, index) => {
-            const itemTrans = item.getComponent(UITransform);
-            const itemScale = this.menuItemScales.get(item.name) || item.scale;
-            const itemWidth = itemTrans ? itemTrans.contentSize.width * Math.abs(itemScale.x) : 120;
-            const itemHeight = itemTrans ? itemTrans.contentSize.height * Math.abs(itemScale.y) : 120;
-            itemsWidth += itemWidth + (index > 0 ? itemGap : 0);
-            maxItemHeight = Math.max(maxItemHeight, itemHeight);
+            const visual = this.menuItemVisuals.get(item) || item;
+            const visualTrans = visual.getComponent(UITransform);
+            const visualScale = this.menuItemVisualScales.get(item) || visual.scale;
+            const visualWidth = visualTrans ? visualTrans.contentSize.width * Math.abs(visualScale.x) : 120;
+            const visualHeight = visualTrans ? visualTrans.contentSize.height * Math.abs(visualScale.y) : 120;
+            itemsWidth += visualWidth + (index > 0 ? itemGap : 0);
+            maxItemHeight = Math.max(maxItemHeight, visualHeight);
         });
 
-        const minWidth = visibleItems.length === 1 ? 350 : visibleItems.length === 2 ? 380 : 560;
+        const minWidth = visibleItems.length === 1 ? 150 : visibleItems.length === 2 ? 300 : 450;
         const width = Math.max(minWidth, itemsWidth + horizontalPadding);
-        const height = Math.max(350, maxItemHeight + verticalPadding);
+        const height = Math.max(358, maxItemHeight + verticalPadding);
         menuTrans.setContentSize(width, height);
 
         const anchor = menuTrans.anchorPoint;
@@ -247,11 +289,17 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
         const contentCenterY = height * (0.5 - anchor.y);
         let cursorX = -itemsWidth / 2;
         visibleItems.forEach(item => {
-            const itemTrans = item.getComponent(UITransform);
-            const itemScale = this.menuItemScales.get(item.name) || item.scale;
-            const itemWidth = itemTrans ? itemTrans.contentSize.width * Math.abs(itemScale.x) : 120;
-            item.setPosition(v3(contentCenterX + cursorX + itemWidth / 2, contentCenterY - 33, 0));
-            cursorX += itemWidth + itemGap;
+            const visual = this.menuItemVisuals.get(item) || item;
+            const visualTrans = visual.getComponent(UITransform);
+            const visualScale = this.menuItemVisualScales.get(item) || visual.scale;
+            const visualWidth = visualTrans ? visualTrans.contentSize.width * Math.abs(visualScale.x) : 120;
+            const visualX = contentCenterX + cursorX + visualWidth / 2;
+            visual.setPosition(v3(visualX, contentCenterY, 0));
+
+            const offset = this.menuItemVisualOffsets.get(item) || v3(0, 0, 0);
+            item.setPosition(v3(visualX + offset.x, contentCenterY + offset.y, 0));
+            item.setSiblingIndex(visual.getSiblingIndex() + 1);
+            cursorX += visualWidth + itemGap;
         });
     }
 
@@ -309,11 +357,13 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
             this.originalSelectionMenuScale = this.selectionMenu.scale.clone();
             const menuTrans = this.selectionMenu.getComponent(UITransform);
             if (menuTrans) this.originalSelectionMenuSize = new Size(menuTrans.contentSize.width, menuTrans.contentSize.height);
-            this.selectionMenu.children.forEach(child => {
+            this.cacheSelectionMenuVisuals();
+            const menuItems = this.getSelectionMenuItems();
+            menuItems.forEach(child => {
                 this.menuItemScales.set(child.name, child.scale.clone());
             });
-            if (this.selectionMenu.children.length > 0) {
-                this.originalMenuItemScale = this.selectionMenu.children[0].scale.clone();
+            if (menuItems.length > 0) {
+                this.originalMenuItemScale = menuItems[0].scale.clone();
             }
             this.selectionMenu.active = false;
         }
@@ -947,6 +997,37 @@ private manualStitchArc(g: Graphics, cx: number, cy: number, r: number, startDeg
         else this.handleIncorrectMove();
     }
 
+    private getCanvasRelativeScale(worldScale: Vec3): Vec3 {
+        const canvas = director.getScene()?.getChildByPath("Canvas");
+        const canvasScale = canvas?.worldScale || v3(1, 1, 1);
+        const safeX = Math.abs(canvasScale.x) > 0.0001 ? canvasScale.x : 1;
+        const safeY = Math.abs(canvasScale.y) > 0.0001 ? canvasScale.y : 1;
+        const safeZ = Math.abs(canvasScale.z) > 0.0001 ? canvasScale.z : 1;
+
+        return v3(worldScale.x / safeX, worldScale.y / safeY, worldScale.z / safeZ);
+    }
+
+    private getPlacedItemScale(sourceSize: Size, sourceWorldScale: Vec3): Vec3 {
+        const targetTrans = this.node.getComponent(UITransform);
+        if (!targetTrans || sourceSize.width <= 0 || sourceSize.height <= 0) {
+            return this.getCanvasRelativeScale(sourceWorldScale);
+        }
+
+        const targetWorldScale = this.node.worldScale || v3(1, 1, 1);
+        const padding = 0.72;
+        const maxWidth = targetTrans.contentSize.width * Math.abs(targetWorldScale.x) * padding;
+        const maxHeight = targetTrans.contentSize.height * Math.abs(targetWorldScale.y) * padding;
+        const fitWorldScale = Math.min(maxWidth / sourceSize.width, maxHeight / sourceSize.height);
+        if (!isFinite(fitWorldScale) || fitWorldScale <= 0) {
+            return this.getCanvasRelativeScale(sourceWorldScale);
+        }
+
+        const sourceUniformScale = Math.min(Math.abs(sourceWorldScale.x), Math.abs(sourceWorldScale.y));
+        const placedWorldScale = Math.min(sourceUniformScale, fitWorldScale);
+
+        return this.getCanvasRelativeScale(v3(placedWorldScale, placedWorldScale, sourceWorldScale.z));
+    }
+
    private handleSuccessMove(itemNode: Node) {
     this.hideTutorialElements("Match Success");
     if (this.winMatchClip && GridController.fxSource) {
@@ -973,7 +1054,8 @@ private manualStitchArc(g: Graphics, cx: number, cy: number, r: number, startDeg
     const spriteFrame = itemNode.getComponent(Sprite)?.spriteFrame;
     const itemTrans = itemNode.getComponent(UITransform);
     const sourceSize = itemTrans!.contentSize.clone();
-    const sourceScale = itemNode.scale.clone();
+    const sourceScale = this.getCanvasRelativeScale(itemNode.worldScale || itemNode.scale);
+    const placedScale = this.getPlacedItemScale(sourceSize, itemNode.worldScale || itemNode.scale);
     const startPos = itemNode.worldPosition.clone();
     const endPos = this.node.worldPosition.clone();
     
@@ -994,7 +1076,7 @@ private manualStitchArc(g: Graphics, cx: number, cy: number, r: number, startDeg
     if (button) button.interactable = false;
 
     this.closeSelectionMenu();
-    this.executeFlyingMovement(flyNode, endPos, spriteFrame!, sourceSize, sourceScale, startPos);
+    this.executeFlyingMovement(flyNode, endPos, spriteFrame!, sourceSize, placedScale, startPos);
 }
     private executeFlyingMovement(flyNode: Node, endPos: Vec3, spriteFrame: SpriteFrame, finalSize: Size, finalScale: Vec3, itemStartPos: Vec3) {
         tween(flyNode).parallel(
@@ -1003,15 +1085,7 @@ private manualStitchArc(g: Graphics, cx: number, cy: number, r: number, startDeg
         ).call(() => {
             this.hideSelectedFrame();
             this.isSolved = true;
-            const gridSprite = this.getComponent(Sprite);
-            const gridTrans = this.getComponent(UITransform);
-            if (gridSprite && gridTrans) {
-                gridSprite.sizeMode = Sprite.SizeMode.CUSTOM;
-                gridSprite.spriteFrame = spriteFrame;
-                gridSprite.color = Color.WHITE;
-                gridTrans.setContentSize(finalSize.width, finalSize.height);
-                this.node.setScale(finalScale);
-            }
+            flyNode.name = "PlacedItem";
             if (this.decorationNode) {
                 this.decorationNode.active = true;
                 const decTrans = this.decorationNode.getComponent(UITransform);
@@ -1022,7 +1096,6 @@ private manualStitchArc(g: Graphics, cx: number, cy: number, r: number, startDeg
             this.playBurst();
             // Start rotation effect at the grid box location and keep it running
             this.playSuccessRotation(endPos);
-            flyNode.destroy();
             GridController.matchesMade++;
             this.trackProgression();
             this.handleHintFeedback(() => {
@@ -1377,7 +1450,7 @@ private executeVoiceCall() {
         GridController.allBoxes.forEach(box => {
             if (!box.isSolved) box.applyPulse(box.node, false);
             if (box.selectionMenu) {
-                box.selectionMenu.children.forEach(item => {
+                box.getSelectionMenuItems().forEach(item => {
                     const savedScale = box.menuItemScales.get(item.name) || box.originalMenuItemScale;
                     item.setScale(savedScale);
                 });
@@ -1502,7 +1575,7 @@ private repositionHints(skipOpacityFade: Set<Node> = new Set(), onComplete?: Fun
     });
 
     // --- ANIMATION EXECUTION ---
-    let currentY = 150;
+    let currentY = 0;
     let pendingMoves = activeHints.length;
     const finishMove = () => {
         pendingMoves--;
