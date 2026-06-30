@@ -89,6 +89,9 @@ export class GridController extends Component {
     private static globalHandNode: Node | null = null;
     private static globalHandIdle: SpriteFrame | null = null;
     private static globalHandClick: SpriteFrame | null = null;
+    private static hintOriginalScales: Map<Node, Vec3> = new Map();
+    private static completedItemNames: Set<string> = new Set();
+    private static completedMenuItemKeys: Set<string> = new Set();
 
     @property(AudioClip) bgmClip: AudioClip = null!;
     @property(AudioClip) clickBoxClip: AudioClip = null!;
@@ -135,8 +138,10 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
 
     private originalGridScale: Vec3 = v3(1, 1, 1);
     private originalHintScale: Vec3 = v3(0.565, 0.565, 0.565);
+    private hintDesignSize: { width: number, height: number } = { width: 0, height: 0 };
     private originalMenuItemScale: Vec3 = v3(1, 1, 1);
     private originalSelectionMenuScale: Vec3 = v3(1, 1, 1);
+    private originalSelectionMenuSize: Size = new Size(0, 0);
     private designScale: Vec3 = v3(1, 1, 1);
     private designSize: { width: number, height: number } = { width: 0, height: 0 };
     private selectedFrameNode: Node | null = null;
@@ -148,6 +153,107 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
     private menuDesignScale: Vec3 = v3(1, 1, 1);
     private targetScale: Vec3 = v3(1, 1, 1);
     private targetSize: { width: number, height: number } = { width: 0, height: 0 };
+
+    private getItemSpriteFrame(item: Node): SpriteFrame | null {
+        return item.getComponent(Sprite)?.spriteFrame || null;
+    }
+
+    private getSpriteKey(spriteFrame: SpriteFrame | null): string {
+        if (!spriteFrame) return "";
+
+        const asset = spriteFrame as any;
+        return asset.uuid || asset._uuid || asset.name || "";
+    }
+
+    private getSelectionMenuGroupKey(): string {
+        if (!this.selectionMenu) return "";
+
+        return this.selectionMenu.children
+            .map(item => this.getSpriteKey(this.getItemSpriteFrame(item)))
+            .filter(key => key.length > 0)
+            .sort()
+            .join("|");
+    }
+
+    private getMenuItemCompletionKey(item: Node): string {
+        const groupKey = this.getSelectionMenuGroupKey();
+        const itemKey = this.getSpriteKey(this.getItemSpriteFrame(item)) || item.name;
+
+        if (!groupKey || !itemKey) return "";
+        return `${groupKey}::${itemKey}`;
+    }
+
+    private isMenuItemCompleted(item: Node): boolean {
+        const itemKey = this.getMenuItemCompletionKey(item);
+        if (itemKey && GridController.completedMenuItemKeys.has(itemKey)) return true;
+        return !itemKey && item.name && GridController.completedItemNames.has(item.name);
+    }
+
+    private refreshSelectionMenuItems() {
+        if (!this.selectionMenu) return;
+
+        const visibleItems: Node[] = [];
+        this.selectionMenu.children.forEach(item => {
+            const isCompleted = this.isMenuItemCompleted(item);
+            const savedScale = this.menuItemScales.get(item.name) || item.scale.clone();
+            Tween.stopAllByTarget(item);
+            item.active = !isCompleted;
+            item.setScale(savedScale);
+
+            const button = item.getComponent(Button);
+            if (button) button.interactable = !isCompleted;
+            if (!isCompleted) visibleItems.push(item);
+        });
+
+        this.fitSelectionMenuToItems(visibleItems);
+    }
+
+    private static markItemCompleted(itemName: string, itemKey: string) {
+        if (!itemName && !itemKey) return;
+
+        if (itemName) GridController.completedItemNames.add(itemName);
+        if (itemKey) GridController.completedMenuItemKeys.add(itemKey);
+        GridController.allBoxes.forEach(box => box.refreshSelectionMenuItems());
+    }
+
+    private fitSelectionMenuToItems(visibleItems: Node[]) {
+        if (!this.selectionMenu || visibleItems.length === 0) return;
+
+        const menuTrans = this.selectionMenu.getComponent(UITransform);
+        if (!menuTrans) return;
+
+        const itemGap = 62;
+        const horizontalPadding = 52;
+        const verticalPadding = 44;
+        let itemsWidth = 0;
+        let maxItemHeight = 0;
+
+        visibleItems.forEach((item, index) => {
+            const itemTrans = item.getComponent(UITransform);
+            const itemScale = this.menuItemScales.get(item.name) || item.scale;
+            const itemWidth = itemTrans ? itemTrans.contentSize.width * Math.abs(itemScale.x) : 120;
+            const itemHeight = itemTrans ? itemTrans.contentSize.height * Math.abs(itemScale.y) : 120;
+            itemsWidth += itemWidth + (index > 0 ? itemGap : 0);
+            maxItemHeight = Math.max(maxItemHeight, itemHeight);
+        });
+
+        const minWidth = visibleItems.length === 1 ? 350 : visibleItems.length === 2 ? 380 : 560;
+        const width = Math.max(minWidth, itemsWidth + horizontalPadding);
+        const height = Math.max(350, maxItemHeight + verticalPadding);
+        menuTrans.setContentSize(width, height);
+
+        const anchor = menuTrans.anchorPoint;
+        const contentCenterX = width * (0.5 - anchor.x);
+        const contentCenterY = height * (0.5 - anchor.y);
+        let cursorX = -itemsWidth / 2;
+        visibleItems.forEach(item => {
+            const itemTrans = item.getComponent(UITransform);
+            const itemScale = this.menuItemScales.get(item.name) || item.scale;
+            const itemWidth = itemTrans ? itemTrans.contentSize.width * Math.abs(itemScale.x) : 120;
+            item.setPosition(v3(contentCenterX + cursorX + itemWidth / 2, contentCenterY - 33, 0));
+            cursorX += itemWidth + itemGap;
+        });
+    }
 
 
     private checkTapProgress() {
@@ -167,6 +273,8 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
     start() {
         // Fire LOADED → DISPLAYED sequence when game first loads (only once)
         if (GridController.allBoxes.length === 0) {
+            GridController.completedItemNames.clear();
+            GridController.completedMenuItemKeys.clear();
             if (Analytics.instance) {
                 // 1. Fire LOADED first to signal assets are ready
                 Analytics.instance.dispatchEvent(analyticsEvents.LOADED);
@@ -190,10 +298,17 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
         }
         if (this.associatedHint) {
             this.originalHintScale = this.associatedHint.scale.clone();
+            const hintTrans = this.associatedHint.getComponent(UITransform);
+            if (hintTrans) {
+                this.hintDesignSize = { width: hintTrans.contentSize.width, height: hintTrans.contentSize.height };
+            }
         }
+        this.cacheHintOriginalScales();
         if (this.selectionMenu) {
             this.menuDesignScale = this.selectionMenu.scale.clone();
             this.originalSelectionMenuScale = this.selectionMenu.scale.clone();
+            const menuTrans = this.selectionMenu.getComponent(UITransform);
+            if (menuTrans) this.originalSelectionMenuSize = new Size(menuTrans.contentSize.width, menuTrans.contentSize.height);
             this.selectionMenu.children.forEach(child => {
                 this.menuItemScales.set(child.name, child.scale.clone());
             });
@@ -334,7 +449,7 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
         ) || this;
 
         guideOwner.showGuideLabel();
-        handTarget.showSelectedFrame();
+        // handTarget.showSelectedFrame();
 
         if (handTarget.associatedHint && handTarget.associatedHint.active) {
             handTarget.showIdleHint();
@@ -503,7 +618,7 @@ private spawnClickRipple(worldPos: Vec3) {
     rippleNode.setWorldPosition(worldPos);
 
     // Spread the 5 rays evenly around the center (Vertical Up)
-    const startAngle = -60; // Tilted left
+    const startAngle = -80; // Tilted left
     const angleStep = 30;   // 30 degrees distance between each ray
 
     for (let i = 0; i < 5; i++) {
@@ -688,12 +803,14 @@ private manualStitchArc(g: Graphics, cx: number, cy: number, r: number, startDeg
         }
         if (!GridController.isTimerStarted) GridController.isTimerStarted = true;
         this.hideTutorialElements("Box Clicked");
-         this.syncHintHighlight();
+        // Do not play hint voice on every grid tap. Hint voice is handled after clue reveal/reposition.
+        // this.syncHintHighlight();
         if (GridController.activeBox && GridController.activeBox !== this) {
             GridController.activeBox.closeSelectionMenu();
         }
+        this.refreshSelectionMenuItems();
         if (this.selectionMenu.active) return;
-        this.showSelectedFrame();
+        // this.showSelectedFrame();
         this.selectionMenu.active = true;
         GridController.activeBox = this;
         
@@ -710,8 +827,7 @@ private manualStitchArc(g: Graphics, cx: number, cy: number, r: number, startDeg
     // --- FIX 2: COORDINATE CALCULATIONS ---
     // Since it's on the Canvas now, we set the World Position
     // We target slightly below the box clicked
-    const boxWorldPos = this.node.worldPosition;
-        this.selectionMenu.setWorldPosition(v3(this.node.worldPosition.x, this.node.worldPosition.y - 80, 0));
+        this.positionSelectionMenuNearGridCell();
         this.selectionMenu.setScale(v3(0, 0, 0));
         tween(this.selectionMenu).to(0.2, { scale: this.originalSelectionMenuScale }, { easing: 'backOut' }).call(() => {
             if (!GridController.hasShownFirstTapHand) {
@@ -720,6 +836,34 @@ private manualStitchArc(g: Graphics, cx: number, cy: number, r: number, startDeg
             }
             //   this.startMenuTimer();
         }).start();
+    }
+
+    private positionSelectionMenuNearGridCell() {
+        if (!this.selectionMenu) return;
+
+        const menuTrans = this.selectionMenu.getComponent(UITransform);
+        const canvas = director.getScene()?.getChildByPath("Canvas");
+        const canvasTrans = canvas?.getComponent(UITransform);
+        const width = menuTrans ? menuTrans.contentSize.width * Math.abs(this.originalSelectionMenuScale.x) : this.originalSelectionMenuSize.width;
+        const height = menuTrans ? menuTrans.contentSize.height * Math.abs(this.originalSelectionMenuScale.y) : this.originalSelectionMenuSize.height;
+        const anchorX = menuTrans ? menuTrans.anchorPoint.x : 0.5;
+        const anchorY = menuTrans ? menuTrans.anchorPoint.y : 0.5;
+        const margin = 18;
+        let targetX = this.node.worldPosition.x;
+        let targetY = this.node.worldPosition.y - 80;
+
+        if (canvasTrans) {
+            const canvasWorld = canvas!.worldPosition;
+            const minX = canvasWorld.x - canvasTrans.contentSize.width / 2 + width * anchorX + margin;
+            const maxX = canvasWorld.x + canvasTrans.contentSize.width / 2 - width * (1 - anchorX) - margin;
+            const minY = canvasWorld.y - canvasTrans.contentSize.height / 2 + height * anchorY + margin;
+            const maxY = canvasWorld.y + canvasTrans.contentSize.height / 2 - height * (1 - anchorY) - margin;
+
+            targetX = Math.min(maxX, Math.max(minX, targetX));
+            targetY = Math.min(maxY, Math.max(minY, targetY));
+        }
+
+        this.selectionMenu.setWorldPosition(v3(targetX, targetY, 0));
     }
     private syncHintHighlight() {
     // 1. Safety: Do we have a hint and a voice clip?
@@ -777,11 +921,11 @@ private manualStitchArc(g: Graphics, cx: number, cy: number, r: number, startDeg
         const hand = GridController.globalHandNode;
         if (!hand || !this.selectionMenu) return;
         const targetItem = this.selectionMenu.getChildByName(this.correctItemName);
-        if (targetItem) {
+        if (targetItem && targetItem.active) {
             GridController.isHandShowing = true;
             hand.active = true;
             hand.setSiblingIndex(999);
-            hand.setWorldPosition(v3(targetItem.worldPosition.x + 60, targetItem.worldPosition.y - 70, 0));
+            hand.setWorldPosition(v3(targetItem.worldPosition.x + 10, targetItem.worldPosition.y - 50, 0));
             hand.setScale(v3(0, 0, 0));
             tween(hand).to(0.2, { scale: GridController.initialHandScale }, { easing: 'backOut' }).call(() => this.playHandAnimation()).start();
             Tween.stopAllByTarget(targetItem);
@@ -798,6 +942,7 @@ private manualStitchArc(g: Graphics, cx: number, cy: number, r: number, startDeg
         GridController.idleTimer = 0;
           if (this.selectionTimerBar) Tween.stopAllByTarget(this.selectionTimerBar);
         const clickedNode = event.target as Node;
+        if (!clickedNode.active || this.isMenuItemCompleted(clickedNode)) return;
         if (clickedNode.name === this.correctItemName) this.handleSuccessMove(clickedNode);
         else this.handleIncorrectMove();
     }
@@ -843,6 +988,11 @@ private manualStitchArc(g: Graphics, cx: number, cy: number, r: number, startDeg
     flyNode.setWorldPosition(startPos);
     flyNode.setScale(sourceScale);
     
+    GridController.markItemCompleted(itemNode.name, this.getMenuItemCompletionKey(itemNode));
+    itemNode.active = false;
+    const button = itemNode.getComponent(Button);
+    if (button) button.interactable = false;
+
     this.closeSelectionMenu();
     this.executeFlyingMovement(flyNode, endPos, spriteFrame!, sourceSize, sourceScale, startPos);
 }
@@ -901,21 +1051,90 @@ private manualStitchArc(g: Graphics, cx: number, cy: number, r: number, startDeg
         }
     }
 
+    private resolveHintContainer(): Node | null {
+        if (this.hintContainer?.isValid) {
+            if (this.hintContainer.name === "Hints") return this.hintContainer;
+
+            const parent = this.hintContainer.parent;
+            if (parent?.isValid && parent.name === "Hints") return parent;
+        }
+
+        if (this.associatedHint?.isValid) {
+            const parent = this.associatedHint.parent;
+            if (parent?.isValid && parent.name === "Hints") return parent;
+        }
+
+        return this.hintContainer?.isValid ? this.hintContainer : null;
+    }
+
+    private cacheHintOriginalScales() {
+        const hintContainer = this.resolveHintContainer();
+        if (!hintContainer?.isValid) return;
+
+        hintContainer.children.forEach(hint => {
+            if (!GridController.hintOriginalScales.has(hint)) {
+                GridController.hintOriginalScales.set(hint, hint.scale.clone());
+            }
+        });
+    }
+
+    private getHintOriginalScale(hint: Node): Vec3 {
+        let scale = GridController.hintOriginalScales.get(hint);
+        if (!scale) {
+            scale = hint.scale.clone();
+            GridController.hintOriginalScales.set(hint, scale);
+        }
+        return scale.clone();
+    }
+
+    private getHintRevealScale(targetNode?: Node): Vec3 {
+        if (targetNode?.isValid) {
+            const targetScale = this.getHintOriginalScale(targetNode);
+            if (targetScale.x > 0.01 && targetScale.y > 0.01) {
+                return targetScale;
+            }
+        }
+
+        const hintContainer = this.resolveHintContainer();
+        if (hintContainer?.isValid) {
+            const existingHint = hintContainer.children.find(child =>
+                child.isValid &&
+                child.active &&
+                child !== targetNode &&
+                this.getHintOriginalScale(child).x > 0.01 &&
+                this.getHintOriginalScale(child).y > 0.01
+            );
+            if (existingHint) {
+                return this.getHintOriginalScale(existingHint);
+            }
+        }
+
+        if (this.associatedHint?.isValid && this.associatedHint.active && this.associatedHint.scale.x > 0.01) {
+            return this.associatedHint.scale.clone();
+        }
+
+        return this.originalHintScale.clone();
+    }
+
 private revealNewClues() {
     if (!this.hiddenCluesToUnlock || this.hiddenCluesToUnlock.length === 0) return;
-    this.showPlusOneBubble(this.hiddenCluesToUnlock.length);
+    const revealingClues = this.hiddenCluesToUnlock.filter(clue => clue?.isValid);
+    if (revealingClues.length === 0) {
+        this.hiddenCluesToUnlock = [];
+        return;
+    }
 
-    this.hiddenCluesToUnlock.forEach(clue => {
-        if (!clue) return;
+    this.showPlusOneBubble(revealingClues.length);
+
+    revealingClues.forEach(clue => {
         clue.active = true;
         (clue.getComponent(UIOpacity) || clue.addComponent(UIOpacity)).opacity = 0; 
     });
 
-    this.repositionHints();
-
-    this.scheduleOnce(() => {
-        this.hiddenCluesToUnlock.forEach((realClue, index) => {
+    this.repositionHints(new Set(revealingClues), () => {
+        revealingClues.forEach((realClue, index) => {
             const finalPos = realClue.worldPosition.clone();
+            const targetScale = this.getHintRevealScale(realClue);
             const flyer = instantiate(realClue);
             director.getScene()?.getChildByName("Canvas")?.addChild(flyer);
             (flyer.getComponent(UIOpacity) || flyer.addComponent(UIOpacity)).opacity = 255;
@@ -932,16 +1151,16 @@ private revealNewClues() {
                     // Angle settles smoothly
                     tween().to(0.9, { angle: 0 }, { easing: 'quadOut' }),
                     // Scale bounces in naturally
-                    tween().to(0.8, { scale: v3(0.565, 0.565, 1) }, { easing: 'elasticOut' })
+                    tween().to(0.8, { scale: targetScale }, { easing: 'elasticOut' })
                 )
                 .call(() => {
                     flyer.destroy(); 
                     if (realClue?.isValid) {
                         realClue.getComponent(UIOpacity)!.opacity = 255;
-                        realClue.setScale(v3(0.565, 0.565, 1));
+                        realClue.setScale(targetScale);
                         
                         // Sound/Voice trigger when the last clue 'snaps' into place
-                        if (index === this.hiddenCluesToUnlock.length - 1) {
+                        if (index === revealingClues.length - 1) {
                             this.playNextAvailableVoice();
                         }
                     }
@@ -949,7 +1168,7 @@ private revealNewClues() {
                 .start();
         });
         this.hiddenCluesToUnlock = [];
-    }, 0); 
+    }); 
 }
 
     private showPlusOneBubble(count: number = 1) {
@@ -971,6 +1190,14 @@ private revealNewClues() {
         tween(bubble).to(0.3, { scale: v3(0.71, 0.71, 0.71) }, { easing: 'backOut' }).delay(1.2).to(0.3, { scale: v3(0, 0, 0) }).call(() => bubble.destroy()).start();
     }
 
+    private getHintChild(targetNode: Node, names: string[]): Node | null {
+        for (const name of names) {
+            const child = targetNode.getChildByName(name);
+            if (child) return child;
+        }
+        return null;
+    }
+
     private handleHintFeedback(onComplete: Function) {
     const hintTargets: Node[] = [];
     if (this.associatedHint) hintTargets.push(this.associatedHint);
@@ -983,7 +1210,9 @@ private revealNewClues() {
     if (hintTargets.length === 0) { 
         console.log(`[GRID] No hints to clear for box ${this.node.name}. Proceeding to reveal logic...`);
         onComplete(); 
-         this.playNextAvailableVoice(); // Force check here!
+        if (!this.hiddenCluesToUnlock || this.hiddenCluesToUnlock.length === 0) {
+            this.playNextAvailableVoice();
+        }
         return; 
     }
 
@@ -997,7 +1226,7 @@ private revealNewClues() {
 
     // Pop checkmarks/ticks immediately on all cards involved
     hintTargets.forEach((h) => {
-        let tick = h.getChildByName("RightNode") || h.getChildByName("Checkmark") || (h === this.associatedHint ? this.rightNode : null);
+        const tick = this.getHintChild(h, ["RightNode", "Checkmark", "Tick", "TickMark"]);
         if (tick) {
             tick.active = true;
             tick.setScale(v3(0, 0, 0));
@@ -1009,37 +1238,38 @@ private revealNewClues() {
 
     // FLY OUT ANIMATION
     hintsToRemove.forEach((card, index) => {
-        const pin = card.getChildByName("Pin") || (card === this.associatedHint ? this.pinNode : null);
+        const pin = this.getHintChild(card, ["Pin", "pin", "PinNode"]);
         if (pin) {
-            let pinOp = pin.getComponent(UIOpacity) || pin.addComponent(UIOpacity);
-            tween(pin).parallel(tween().by(1.2, { position: v3(20, -1000, 0) }, { easing: 'sineIn' }), tween().by(1.2, { angle: -45 }), tween(pinOp).delay(0.4).to(0.4, { opacity: 0 })).start();
+            const pinOp = pin.getComponent(UIOpacity) || pin.addComponent(UIOpacity);
+            tween(pinOp).to(0.25, { opacity: 0 }).start();
         }
-       tween(card)
-        .delay(0.4 + (0.15 * index)) 
-        // 1. ANTICIPATION: Small shake/upwards movement
-        .to(0.15, { angle: -5, scale: v3(0.3, 0.3, 1) }, { easing: 'sineOut' })
-        // 2. RELEASE: Fly away with Cubic easing
-        .parallel(
-            tween().to(0.7, { position: v3(card.position.x - 900, card.position.y + 400, 0) }, { easing: 'cubicIn' }),
-            tween().to(0.7, { angle: 45, scale: v3(0, 0, 1) })
-        )
-        .call(() => {
-            card.active = false;
-            if (index === hintsToRemove.length - 1) { 
-                this.repositionHints(); 
-                this.playNextAvailableVoice(); 
-                onComplete(); 
-            }
-        }).start();
+
+        tween(card)
+            .delay(0.4 + (0.15 * index))
+            // 1. ANTICIPATION: Small shake/upwards movement
+            .to(0.15, { angle: -5, scale: v3(0.3, 0.3, 1) }, { easing: 'sineOut' })
+            // 2. RELEASE: Fly away with Cubic easing
+            .parallel(
+                tween().to(0.7, { position: v3(card.position.x - 900, card.position.y + 400, 0) }, { easing: 'cubicIn' }),
+                tween().to(0.7, { angle: 45, scale: v3(0, 0, 1) })
+            )
+            .call(() => {
+                card.active = false;
+                if (index === hintsToRemove.length - 1) {
+                    this.repositionHints();
+                    if (!this.hiddenCluesToUnlock || this.hiddenCluesToUnlock.length === 0) {
+                        this.playNextAvailableVoice();
+                    }
+                    onComplete();
+                }
+            }).start();
     });
 }
 
   private playNextAvailableVoice() {
     if (GridController.isGameOver) return;
 
-    // --- FIX: USE DIRECT REFERENCE, NO ARROW FUNCTION () => ---
-    // This allows Cocos to find the EXACT previous timer and stop it.
-    this.unschedule(this.executeVoiceCall); 
+    GridController.allBoxes.forEach(box => box.unschedule(box.executeVoiceCall));
     this.scheduleOnce(this.executeVoiceCall, 0.5);
 }
 
@@ -1108,27 +1338,29 @@ private executeVoiceCall() {
         this.closeSelectionMenu();
         if (this.guideNode) { Tween.stopAllByTarget(this.guideNode); this.guideNode.active = false; }
 
-        this.redirectToStoreAfterGameOver(reason);
+        this.triggerGameEndCTA(reason);
     }
 
-    private redirectToStoreAfterGameOver(reason: string) {
-        const ctaButtonNode = director.getScene()?.getChildByPath("Canvas/CTA/play_now_pink-removebg-preview");
-        const ctaHandler = ctaButtonNode?.getComponent(CTAButtonHandler);
-
-        if (ctaHandler) {
-            console.log(`[GAME OVER REDIRECT] ${reason}. Redirecting to store.`);
-            ctaHandler.onStoreButtonClicked();
-        } else {
-            console.warn("[GAME OVER REDIRECT] CTAButtonHandler not found. Showing endcard fallback.");
+    private triggerGameEndCTA(reason: string) {
+        this.scheduleOnce(() => {
             const endScreen = GridController.globalCtaEndScreen || this.ctaEndScreen || director.getScene()?.getChildByPath("Canvas/CTA");
+
             if (endScreen) {
+                console.log(`[GAME OVER CTA] ${reason}. Showing CTA screen.`);
                 Analytics.instance?.dispatchEvent(analyticsEvents.ENDCARD_SHOWN);
                 endScreen.active = true;
                 endScreen.setScale(v3(0, 0, 0));
                 endScreen.setSiblingIndex(999);
                 tween(endScreen).to(0.5, { scale: v3(1, 1, 1) }, { easing: 'backOut' }).start();
+            } else {
+                console.warn("[GAME OVER CTA] CTA screen not found. Falling back to direct redirect.");
+                const ctaButtonNode = director.getScene()?.getChildByPath("Canvas/CTA/play_now_pink-removebg-preview");
+                const ctaHandler = ctaButtonNode?.getComponent(CTAButtonHandler);
+                if (ctaHandler) {
+                    ctaHandler.onStoreButtonClicked();
+                }
             }
-        }
+        }, 0.15);
     }
 
     public closeSelectionMenu() {
@@ -1149,6 +1381,7 @@ private executeVoiceCall() {
                     const savedScale = box.menuItemScales.get(item.name) || box.originalMenuItemScale;
                     item.setScale(savedScale);
                 });
+                box.refreshSelectionMenuItems();
             }
         });
         if (GridController.globalHandNode) {
@@ -1166,7 +1399,7 @@ private executeVoiceCall() {
     GridController.isHandShowing = true;
     
      // --- ADDED THIS: Show the dotted selection frame ---
-    this.showSelectedFrame();
+    // this.showSelectedFrame();
 
     // Always pulse the Grid Box
     this.applyPulse(this.node, true);
@@ -1214,8 +1447,8 @@ private playHandAnimation() {
                     if (handSprite?.isValid) handSprite.spriteFrame = GridController.globalHandClick!;
                     
                     // 2. TRIGGER THE YELLOW RIPPLE HERE
-                    // Offsetting it slightly to be at the fingertip (now closer to hand)
-                    const fingerTipPos = v3(hand.worldPosition.x - 40, hand.worldPosition.y + 50, 0);
+                    // Place the ripple just to the right of the hand so it feels attached to the tap
+                    const fingerTipPos = v3(hand.worldPosition.x - 20, hand.worldPosition.y + 45, 0);
                     this.spawnClickRipple(fingerTipPos);
                 })
                 .to(0.12, { scale: clickScale }, { easing: 'quadOut' }) // Smooth press
@@ -1229,13 +1462,22 @@ private playHandAnimation() {
         .start();
 }
 
-private repositionHints() {
-    if (!this.hintContainer) return;
-    const layout = this.hintContainer.getComponent(Layout);
+private repositionHints(skipOpacityFade: Set<Node> = new Set(), onComplete?: Function) {
+    const hintContainer = this.resolveHintContainer();
+    if (!hintContainer) {
+        if (onComplete) onComplete();
+        return;
+    }
+    this.cacheHintOriginalScales();
+    const layout = hintContainer.getComponent(Layout);
     if (layout) layout.enabled = false;
 
     // We only care about active hints that are NOT currently in a "destroying" state
-    const activeHints = this.hintContainer.children.filter(c => c.active && c.scale.x > 0.1);
+    const activeHints = hintContainer.children.filter(c => c.active && c.scale.x > 0.1);
+    if (activeHints.length === 0) {
+        if (onComplete) onComplete();
+        return;
+    }
     
     const MAX_WIDTH = 780; 
     const gapX = 25; // Slightly increased for breathing room
@@ -1246,7 +1488,8 @@ private repositionHints() {
     // --- GRID CALCULATION ---
     activeHints.forEach((h) => {
         const hTrans = h.getComponent(UITransform);
-        const w = hTrans ? hTrans.contentSize.width * h.scale.x : 200; // Accurate width after scale
+        const targetScale = this.getHintOriginalScale(h);
+        const w = hTrans ? hTrans.contentSize.width * targetScale.x : 200; // Accurate width after scale
         
         if (rowWidths[rows.length - 1] + w + gapX > MAX_WIDTH && rows[rows.length - 1].length > 0) {
             rows.push([h]); 
@@ -1260,6 +1503,12 @@ private repositionHints() {
 
     // --- ANIMATION EXECUTION ---
     let currentY = 150;
+    let pendingMoves = activeHints.length;
+    const finishMove = () => {
+        pendingMoves--;
+        if (pendingMoves <= 0 && onComplete) onComplete();
+    };
+
     rows.forEach((rowNodes, rowIndex) => {
         const totalWidth = rowWidths[rowIndex];
         const rowStartX = -(totalWidth / 2);
@@ -1268,7 +1517,8 @@ private repositionHints() {
 
         rowNodes.forEach((h, index) => {
             const hTrans = h.getComponent(UITransform);
-            const w = hTrans ? hTrans.contentSize.width * h.scale.x : 200;
+            const targetScale = this.getHintOriginalScale(h);
+            const w = hTrans ? hTrans.contentSize.width * targetScale.x : 200;
             const tx = rowStartX + xOff + (w / 2);
             const ty = currentY;
 
@@ -1281,15 +1531,16 @@ private repositionHints() {
                 .delay(index * 0.06) // Slightly longer stagger for wave effect
                 .to(0.75, { 
                     position: v3(tx, ty, 0),
-                    scale: v3(0.565, 0.565, 1) // Ensures uniform scale
+                    scale: targetScale
                 }, { 
                     easing: 'elasticOut' // Smooth elastic bounce
                 })
+                .call(finishMove)
                 .start();
 
             // Handle opacity fade-in smoothly
             const opacityComp = h.getComponent(UIOpacity) || h.addComponent(UIOpacity);
-            if (opacityComp.opacity < 255) {
+            if (opacityComp.opacity < 255 && !skipOpacityFade.has(h)) {
                 tween(opacityComp)
                     .delay(index * 0.06)
                     .to(0.5, { opacity: 255 }, { easing: 'quadOut' })
@@ -1297,7 +1548,7 @@ private repositionHints() {
             }
 
             xOff += w + gapX;
-            const actualH = hTrans ? hTrans.contentSize.height * h.scale.y : 200;
+            const actualH = hTrans ? hTrans.contentSize.height * targetScale.y : 200;
             if (actualH > rowMaxH) rowMaxH = actualH;
         });
         currentY -= (rowMaxH + gapY);
