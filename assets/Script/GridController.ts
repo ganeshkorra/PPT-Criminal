@@ -97,6 +97,7 @@ export class GridController extends Component {
     private static globalHandIdle: SpriteFrame | null = null;
     private static globalHandClick: SpriteFrame | null = null;
     private static hintOriginalScales: Map<Node, Vec3> = new Map();
+    private static hintOriginalPositions: Map<Node, Vec3> = new Map();
     private static completedItemNames: Set<string> = new Set();
     private static completedMenuItemKeys: Set<string> = new Set();
     private static completedColumnCounts: Map<string, number> = new Map();
@@ -466,10 +467,23 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
         }
         if (this.selectionMenu) this.selectionMenu.active = false;
         if (this.decorationNode) this.decorationNode.active = false;
+        if (!this.introContainer) {
+            const canvas = director.getScene()?.getChildByName("Canvas");
+            const background = canvas?.getChildByName("BGG");
+            this.introContainer = (background?.getChildByName("Granny VS You") ||
+                background?.getChildByName("VS") ||
+                background?.getChildByName("Group 1772592774")) as Node;
+        }
         if (this.introContainer && !GridController.isIntroPlaying) {
-            this.introContainer.active = false;
-            const introOpacity = this.introContainer.getComponent(UIOpacity);
-            if (introOpacity) introOpacity.opacity = 0;
+            this.introContainer.active = true;
+            const table = this.introContainer.getChildByName("Table") || this.introContainer.children[0];
+            const vsLogo = this.introContainer.getChildByName("VS") || this.introContainer.children[1];
+            const thunder = this.introContainer.getChildByName("Thunder") || this.introContainer.children[2];
+            if (table) table.active = false;
+            if (vsLogo) vsLogo.active = false;
+            if (thunder) thunder.active = false;
+            const charactersSprite = this.introContainer.getComponent(Sprite);
+            if (charactersSprite) charactersSprite.enabled = false;
         }
         if (this.handNode) {
             GridController.initialHandScale = this.handNode.scale.clone();
@@ -560,27 +574,183 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
 
         GridController.isIntroPlaying = true;
         this.introContainer.active = true;
-        Tween.stopAllByTarget(this.introContainer);
+        const table = this.introContainer.getChildByName("Table") || this.introContainer.children[0] || null;
+        const vsLogo = this.introContainer.getChildByName("VS") || this.introContainer.children[1] || null;
+        const thunder = this.introContainer.getChildByName("Thunder") || this.introContainer.children[2] || null;
+        const charactersSprite = this.introContainer.getComponent(Sprite);
 
-        let introOpacity = this.introContainer.getComponent(UIOpacity);
-        if (!introOpacity) {
-            introOpacity = this.introContainer.addComponent(UIOpacity);
+        if (!table || !vsLogo || !thunder || !charactersSprite) {
+            console.warn("[INTRO] Granny VS You requires its own Sprite plus Table, VS, and Thunder children.");
+            GridController.isIntroPlaying = false;
+            this.startGameplay();
+            return;
         }
-        introOpacity.opacity = 0;
 
-        this.introContainer.setScale(v3(0.8, 0.8, 0.8));
+        const originalPosition = this.introContainer.position.clone();
+        const originalScale = this.introContainer.scale.clone();
+        const tableScale = table.scale.clone();
+        const vsScale = vsLogo.scale.clone();
+        const thunderScale = thunder.scale.clone();
+        const thunderAngle = thunder.angle;
+
+        Tween.stopAllByTarget(this.introContainer);
+        [table, vsLogo, thunder].forEach(node => Tween.stopAllByTarget(node));
+
+        const canvas = director.getScene()?.getChildByName("Canvas");
+        const centerWorld = canvas?.worldPosition.clone() || v3(0, 0, 0);
+        const parentTransform = this.introContainer.parent?.getComponent(UITransform);
+        const centerPosition = parentTransform?.convertToNodeSpaceAR(centerWorld) || v3(0, 0, originalPosition.z);
+
+        charactersSprite.enabled = false;
+        [table, vsLogo, thunder].forEach(node => node.active = false);
+
+        const revealChild = (node: Node, targetScale: Vec3, duration: number, onComplete?: () => void) => {
+            node.active = true;
+            node.setScale(v3(0, 0, targetScale.z));
+            const opacity = node.getComponent(UIOpacity) || node.addComponent(UIOpacity);
+            opacity.opacity = 0;
+            tween(opacity).to(Math.min(duration, 0.18), { opacity: 255 }, { easing: 'quadOut' }).start();
+            tween(node)
+                .to(duration, { scale: targetScale }, { easing: 'backOut' })
+                .call(() => onComplete?.())
+                .start();
+        };
 
         GridController.hasIntroPlayed = true;
-        const introTween = tween(this.introContainer)
-            .to(0.6, { scale: v3(1, 1, 1) }, { easing: 'backOut' });
+        this.introContainer.setPosition(originalPosition);
+        this.introContainer.setScale(originalScale);
+        tween(this.introContainer)
+            .to(0.55, { position: centerPosition }, { easing: 'quadOut' })
+            .call(() => {
+                revealChild(table, tableScale, 0.35, () => {
+                    charactersSprite.enabled = true;
+                    tween(this.introContainer)
+                        .to(0.16, { scale: v3(originalScale.x * 1.05, originalScale.y * 1.05, originalScale.z) }, { easing: 'quadOut' })
+                        .to(0.16, { scale: originalScale }, { easing: 'quadIn' })
+                        .call(() => {
+                            revealChild(vsLogo, vsScale, 0.32, () => {
+                                revealChild(thunder, thunderScale, 0.36, () => {
+                                    const thunderOpacity = thunder.getComponent(UIOpacity)!;
+                                    tween(thunderOpacity)
+                                        .to(0.05, { opacity: 60 })
+                                        .to(0.06, { opacity: 255 })
+                                        .to(0.05, { opacity: 100 })
+                                        .to(0.07, { opacity: 255 })
+                                        .start();
+                                    tween(thunder)
+                                        .to(0.08, { angle: thunderAngle + 2, scale: v3(thunderScale.x * 1.06, thunderScale.y * 0.94, thunderScale.z) })
+                                        .to(0.08, { angle: thunderAngle - 2, scale: thunderScale })
+                                        .to(0.12, { angle: thunderAngle }, { easing: 'backOut' })
+                                        .delay(0.5)
+                                        .call(() => {
+                                            tween(this.introContainer)
+                                                .to(0.7, { position: originalPosition, scale: originalScale }, { easing: 'quadInOut' })
+                                                .call(() => {
+                                                    this.startFaceOffLoop(
+                                                        this.introContainer,
+                                                        vsLogo,
+                                                        thunder,
+                                                        originalScale,
+                                                        vsScale,
+                                                        thunderScale,
+                                                        thunderAngle
+                                                    );
+                                                    GridController.isIntroPlaying = false;
+                                                    this.startGameplay();
+                                                })
+                                                .start();
+                                        })
+                                        .start();
+                                });
+                            });
+                        })
+                        .start();
+                });
+            })
+            .start();
+    }
 
-        tween(introOpacity)
-            .to(0.6, { opacity: 255 }, { easing: 'linear' })
+    private startFaceOffLoop(
+        group: Node,
+        vsLogo: Node,
+        thunder: Node,
+        groupScale: Vec3,
+        vsScale: Vec3,
+        thunderScale: Vec3,
+        thunderAngle: number
+    ) {
+        const thunderOpacity = thunder.getComponent(UIOpacity) || thunder.addComponent(UIOpacity);
+        const groupPopScale = v3(groupScale.x * 1.035, groupScale.y * 1.035, groupScale.z);
+        const vsPopScale = v3(vsScale.x * 1.14, vsScale.y * 1.14, vsScale.z);
+        const thunderStretch = v3(thunderScale.x * 1.08, thunderScale.y * 0.93, thunderScale.z);
+        const thunderCompress = v3(thunderScale.x * 0.96, thunderScale.y * 1.05, thunderScale.z);
+        const thunderPosition = thunder.position.clone();
+
+        Tween.stopAllByTarget(group);
+        Tween.stopAllByTarget(vsLogo);
+        Tween.stopAllByTarget(thunder);
+        Tween.stopAllByTarget(thunderOpacity);
+
+        // Granny and lady pulse first, followed closely by the VS badge.
+        tween(group)
+            .delay(1.1)
+            .to(0.12, { scale: groupPopScale }, { easing: 'quadOut' })
+            .to(0.18, { scale: groupScale }, { easing: 'backOut' })
+            .delay(1.1)
+            .union()
+            .repeatForever()
             .start();
 
-        introTween.call(() => {
-            this.scheduleOnce(() => this.hideIntroAndStartGame(), 2.0);
-        }).start();
+        tween(vsLogo)
+            .delay(1.2)
+            .to(0.12, { scale: vsPopScale }, { easing: 'quadOut' })
+            .to(0.18, { scale: vsScale }, { easing: 'backOut' })
+            .delay(1.0)
+            .union()
+            .repeatForever()
+            .start();
+
+        // Asymmetric flashes avoid the mechanical look of an even opacity pulse.
+        tween(thunderOpacity)
+            .delay(1.45)
+            .to(0.04, { opacity: 255 })
+            .to(0.04, { opacity: 35 })
+            .to(0.05, { opacity: 255 })
+            .to(0.06, { opacity: 80 })
+            .to(0.07, { opacity: 255 })
+            .to(0.09, { opacity: 190 })
+            .delay(0.7)
+            .union()
+            .repeatForever()
+            .start();
+
+        // Tiny, rapid distortions make the illustrated bolt feel like a strike.
+        tween(thunder)
+            .delay(1.45)
+            .to(0.06, {
+                position: v3(thunderPosition.x + 4, thunderPosition.y + 2, thunderPosition.z),
+                scale: thunderStretch,
+                angle: thunderAngle + 1.5
+            })
+            .to(0.05, {
+                position: v3(thunderPosition.x - 3, thunderPosition.y - 1, thunderPosition.z),
+                scale: thunderCompress,
+                angle: thunderAngle - 1.5
+            })
+            .to(0.07, {
+                position: v3(thunderPosition.x + 2, thunderPosition.y + 1, thunderPosition.z),
+                scale: thunderStretch,
+                angle: thunderAngle + 0.8
+            })
+            .to(0.17, {
+                position: thunderPosition,
+                scale: thunderScale,
+                angle: thunderAngle
+            }, { easing: 'backOut' })
+            .delay(0.7)
+            .union()
+            .repeatForever()
+            .start();
     }
 
     private hideIntroAndStartGame() {
@@ -1291,6 +1461,9 @@ private manualStitchArc(g: Graphics, cx: number, cy: number, r: number, startDeg
             if (!GridController.hintOriginalScales.has(hint)) {
                 GridController.hintOriginalScales.set(hint, hint.scale.clone());
             }
+            if (!GridController.hintOriginalPositions.has(hint)) {
+                GridController.hintOriginalPositions.set(hint, hint.position.clone());
+            }
         });
     }
 
@@ -1301,6 +1474,15 @@ private manualStitchArc(g: Graphics, cx: number, cy: number, r: number, startDeg
             GridController.hintOriginalScales.set(hint, scale);
         }
         return scale.clone();
+    }
+
+    private getHintOriginalPosition(hint: Node): Vec3 {
+        let position = GridController.hintOriginalPositions.get(hint);
+        if (!position) {
+            position = hint.position.clone();
+            GridController.hintOriginalPositions.set(hint, position);
+        }
+        return position.clone();
     }
 
     private getHintRevealScale(targetNode?: Node): Vec3 {
@@ -1696,79 +1878,45 @@ private repositionHints(skipOpacityFade: Set<Node> = new Set(), onComplete?: Fun
         return;
     }
     
-    const MAX_WIDTH = 780; 
-    const gapX = 25; // Slightly increased for breathing room
-    const gapY = 20;
-    let rows: Node[][] = [[]]; 
-    let rowWidths: number[] = [0];
-
-    // --- GRID CALCULATION ---
-    activeHints.forEach((h) => {
-        const hTrans = h.getComponent(UITransform);
-        const targetScale = this.getHintOriginalScale(h);
-        const w = hTrans ? hTrans.contentSize.width * targetScale.x : 200; // Accurate width after scale
-        
-        if (rowWidths[rows.length - 1] + w + gapX > MAX_WIDTH && rows[rows.length - 1].length > 0) {
-            rows.push([h]); 
-            rowWidths.push(w);
-        } else {
-            const lastIdx = rows.length - 1;
-            rowWidths[lastIdx] += (rows[lastIdx].length > 0 ? gapX : 0) + w;
-            rows[lastIdx].push(h);
-        }
-    });
+    // The container's child order defines the slot order. Each slot position is
+    // captured from the scene before gameplay moves any hint.
+    const sceneSlots = hintContainer.children.map(hint => this.getHintOriginalPosition(hint));
 
     // --- ANIMATION EXECUTION ---
-    let currentY = 10;
     let pendingMoves = activeHints.length;
     const finishMove = () => {
         pendingMoves--;
         if (pendingMoves <= 0 && onComplete) onComplete();
     };
 
-    rows.forEach((rowNodes, rowIndex) => {
-        const totalWidth = rowWidths[rowIndex];
-        const rowStartX = -(totalWidth / 2);
-        let xOff = 0;
-        let rowMaxH = 0;
+    activeHints.forEach((h, index) => {
+        const targetScale = this.getHintOriginalScale(h);
+        const targetPosition = sceneSlots[index] || this.getHintOriginalPosition(h);
 
-        rowNodes.forEach((h, index) => {
-            const hTrans = h.getComponent(UITransform);
-            const targetScale = this.getHintOriginalScale(h);
-            const w = hTrans ? hTrans.contentSize.width * targetScale.x : 200;
-            const tx = rowStartX + xOff + (w / 2);
-            const ty = currentY;
+        // --- SMOOTH REPOSITIONING ---
+        // 1. Stop previous animations to prevent "fighting" tweens
+        Tween.stopAllByTarget(h);
 
-            // --- SMOOTH REPOSITIONING ---
-            // 1. Stop previous animations to prevent "fighting" tweens
-            Tween.stopAllByTarget(h);
+        // 2. Natural elastic bounce settle for smooth feel
+        tween(h)
+            .delay(index * 0.06) // Slightly longer stagger for wave effect
+            .to(0.75, {
+                position: targetPosition,
+                scale: targetScale
+            }, {
+                easing: 'elasticOut' // Smooth elastic bounce
+            })
+            .call(finishMove)
+            .start();
 
-            // 2. Natural elastic bounce settle for smooth feel
-            tween(h)
-                .delay(index * 0.06) // Slightly longer stagger for wave effect
-                .to(0.75, { 
-                    position: v3(tx, ty, 0),
-                    scale: targetScale
-                }, { 
-                    easing: 'elasticOut' // Smooth elastic bounce
-                })
-                .call(finishMove)
+        // Handle opacity fade-in smoothly
+        const opacityComp = h.getComponent(UIOpacity) || h.addComponent(UIOpacity);
+        if (opacityComp.opacity < 255 && !skipOpacityFade.has(h)) {
+            tween(opacityComp)
+                .delay(index * 0.06)
+                .to(0.5, { opacity: 255 }, { easing: 'quadOut' })
                 .start();
-
-            // Handle opacity fade-in smoothly
-            const opacityComp = h.getComponent(UIOpacity) || h.addComponent(UIOpacity);
-            if (opacityComp.opacity < 255 && !skipOpacityFade.has(h)) {
-                tween(opacityComp)
-                    .delay(index * 0.06)
-                    .to(0.5, { opacity: 255 }, { easing: 'quadOut' })
-                    .start();
-            }
-
-            xOff += w + gapX;
-            const actualH = hTrans ? hTrans.contentSize.height * targetScale.y : 200;
-            if (actualH > rowMaxH) rowMaxH = actualH;
-        });
-        currentY -= (rowMaxH + gapY);
+        }
     });
 }
 
