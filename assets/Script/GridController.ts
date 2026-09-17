@@ -579,7 +579,7 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
             .start();
 
         introTween.call(() => {
-            this.scheduleOnce(() => this.hideIntroAndStartGame(), 3.0);
+            this.scheduleOnce(() => this.hideIntroAndStartGame(), 2.0);
         }).start();
     }
 
