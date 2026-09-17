@@ -28,6 +28,49 @@ export class GridController extends Component {
     @property(Node)
     introContainer: Node = null!;
 
+    @property({ type: Node, tooltip: 'Separate Granny character in the intro group.' })
+    introGranny: Node = null!;
+
+    @property({ type: Node, tooltip: 'Separate player character in the intro group.' })
+    introLady: Node = null!;
+
+    @property({ type: Node, tooltip: 'Active during the intro; hidden once the intro returns to its original position.' })
+    introOverlay: Node = null!;
+
+    @property({ type: Label, tooltip: 'Intro text that loops a fade-in and small pop.' })
+    introMessageLabel: Label = null!;
+
+    private introMessageScale: Vec3 | null = null;
+    private introMessageOpacity: number = 255;
+
+    private animateIntroMessage(playing: boolean) {
+        const node = this.introMessageLabel?.node;
+        if (!node || !node.isValid) return;
+        const opacity = node.getComponent(UIOpacity) || node.addComponent(UIOpacity);
+        if (!this.introMessageScale) {
+            this.introMessageScale = node.scale.clone();
+            this.introMessageOpacity = opacity.opacity;
+        }
+        Tween.stopAllByTarget(node);
+        Tween.stopAllByTarget(opacity);
+        node.setScale(this.introMessageScale);
+        opacity.opacity = this.introMessageOpacity;
+        if (!playing) return;
+
+        const originalScale = this.introMessageScale;
+        tween(node)
+            .to(0.35, { scale: v3(originalScale.x * 1.06, originalScale.y * 1.06, originalScale.z) }, { easing: 'quadOut' })
+            .to(0.25, { scale: originalScale }, { easing: 'backOut' })
+            .delay(0.4)
+            .union().repeatForever().start();
+        opacity.opacity = this.introMessageOpacity * 0.25;
+        tween(opacity)
+            .to(0.35, { opacity: this.introMessageOpacity }, { easing: 'quadOut' })
+            .delay(0.35)
+            .to(0.3, { opacity: this.introMessageOpacity * 0.25 }, { easing: 'quadIn' })
+            .union().repeatForever().start();
+    }
+
     @property(String)
     correctItemName: string = "";
 
@@ -76,6 +119,8 @@ export class GridController extends Component {
     private static activeBox: GridController | null = null;
     private static timerMaster: GridController | null = null;
     private static matchesMade: number = 0;
+    private static isGrannyTurn: boolean = false;
+    private static isMoveInProgress: boolean = false;
 
     private static globalTimerLabel: Label | null = null;
     private static remainingTime: number = 60;
@@ -113,6 +158,7 @@ export class GridController extends Component {
 
     private static globalCtaEndScreen: Node | null = null;
     private isSolved: boolean = false;
+    private turnCharacterScales: Map<Node, Vec3> = new Map();
 
     @property(AudioClip)
     hintVoiceClip: AudioClip = null!;
@@ -368,6 +414,8 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
             GridController.completedColumnDecorations.clear();
             GridController.currentMistakes = 0;
             GridController.matchesMade = 0;
+            GridController.isGrannyTurn = false;
+            GridController.isMoveInProgress = false;
             GridController.activeBox = null;
             GridController.timerMaster = null;
             GridController.remainingTime = 60;
@@ -484,6 +532,7 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
             if (thunder) thunder.active = false;
             const charactersSprite = this.introContainer.getComponent(Sprite);
             if (charactersSprite) charactersSprite.enabled = false;
+            this.getIntroCharacters().forEach(character => character.active = false);
         }
         if (this.handNode) {
             GridController.initialHandScale = this.handNode.scale.clone();
@@ -506,6 +555,7 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
         if (GridController.remainingTime <= 0) {
             this.handleGameOver("TIME OUT");
         }
+        if (GridController.isGrannyTurn || GridController.isMoveInProgress) return;
         GridController.idleTimer += dt;
 
         if (GridController.idleTimer >= this.IDLE_THRESHOLD && !GridController.isHandShowing) {
@@ -569,18 +619,28 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
     }, totalTime);
 }
 
+    private getIntroCharacters(): Node[] {
+        const granny = this.introGranny || this.introContainer?.getChildByName('Granny');
+        const lady = this.introLady || this.introContainer?.getChildByName('Lady');
+        return granny && lady ? [granny, lady] : [];
+    }
+
     private showIntroSequence() {
         if (!this.introContainer) return;
 
         GridController.isIntroPlaying = true;
+        if (this.introOverlay) this.introOverlay.active = true;
+        this.animateIntroMessage(true);
         this.introContainer.active = true;
         const table = this.introContainer.getChildByName("Table") || this.introContainer.children[0] || null;
         const vsLogo = this.introContainer.getChildByName("VS") || this.introContainer.children[1] || null;
         const thunder = this.introContainer.getChildByName("Thunder") || this.introContainer.children[2] || null;
         const charactersSprite = this.introContainer.getComponent(Sprite);
+        const characters = this.getIntroCharacters();
 
-        if (!table || !vsLogo || !thunder || !charactersSprite) {
-            console.warn("[INTRO] Granny VS You requires its own Sprite plus Table, VS, and Thunder children.");
+        if (!table || !vsLogo || !thunder ||
+            (characters.length === 0 && !charactersSprite?.spriteFrame)) {
+            console.warn("[INTRO] Requires Granny and Lady (or a combined character Sprite), plus Table, VS, and Thunder children.");
             GridController.isIntroPlaying = false;
             this.startGameplay();
             return;
@@ -601,7 +661,8 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
         const parentTransform = this.introContainer.parent?.getComponent(UITransform);
         const centerPosition = parentTransform?.convertToNodeSpaceAR(centerWorld) || v3(0, 0, originalPosition.z);
 
-        charactersSprite.enabled = false;
+        if (charactersSprite) charactersSprite.enabled = false;
+        characters.forEach(character => character.active = false);
         [table, vsLogo, thunder].forEach(node => node.active = false);
 
         const revealChild = (node: Node, targetScale: Vec3, duration: number, onComplete?: () => void) => {
@@ -623,7 +684,8 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
             .to(0.55, { position: centerPosition }, { easing: 'quadOut' })
             .call(() => {
                 revealChild(table, tableScale, 0.35, () => {
-                    charactersSprite.enabled = true;
+                    characters.forEach(character => character.active = true);
+                    if (charactersSprite) charactersSprite.enabled = characters.length === 0;
                     tween(this.introContainer)
                         .to(0.16, { scale: v3(originalScale.x * 1.05, originalScale.y * 1.05, originalScale.z) }, { easing: 'quadOut' })
                         .to(0.16, { scale: originalScale }, { easing: 'quadIn' })
@@ -646,15 +708,13 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
                                             tween(this.introContainer)
                                                 .to(0.7, { position: originalPosition, scale: originalScale }, { easing: 'quadInOut' })
                                                 .call(() => {
-                                                    this.startFaceOffLoop(
-                                                        this.introContainer,
-                                                        vsLogo,
-                                                        thunder,
-                                                        originalScale,
-                                                        vsScale,
-                                                        thunderScale,
-                                                        thunderAngle
-                                                    );
+                                                    Tween.stopAllByTarget(vsLogo);
+                                                    Tween.stopAllByTarget(thunder);
+                                                    Tween.stopAllByTarget(thunderOpacity);
+                                                    vsLogo.setScale(vsScale);
+                                                    thunder.setScale(thunderScale);
+                                                    thunder.angle = thunderAngle;
+                                                    thunderOpacity.opacity = 255;
                                                     GridController.isIntroPlaying = false;
                                                     this.startGameplay();
                                                 })
@@ -667,89 +727,6 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
                         .start();
                 });
             })
-            .start();
-    }
-
-    private startFaceOffLoop(
-        group: Node,
-        vsLogo: Node,
-        thunder: Node,
-        groupScale: Vec3,
-        vsScale: Vec3,
-        thunderScale: Vec3,
-        thunderAngle: number
-    ) {
-        const thunderOpacity = thunder.getComponent(UIOpacity) || thunder.addComponent(UIOpacity);
-        const groupPopScale = v3(groupScale.x * 1.035, groupScale.y * 1.035, groupScale.z);
-        const vsPopScale = v3(vsScale.x * 1.14, vsScale.y * 1.14, vsScale.z);
-        const thunderStretch = v3(thunderScale.x * 1.08, thunderScale.y * 0.93, thunderScale.z);
-        const thunderCompress = v3(thunderScale.x * 0.96, thunderScale.y * 1.05, thunderScale.z);
-        const thunderPosition = thunder.position.clone();
-
-        Tween.stopAllByTarget(group);
-        Tween.stopAllByTarget(vsLogo);
-        Tween.stopAllByTarget(thunder);
-        Tween.stopAllByTarget(thunderOpacity);
-
-        // Granny and lady pulse first, followed closely by the VS badge.
-        tween(group)
-            .delay(1.1)
-            .to(0.12, { scale: groupPopScale }, { easing: 'quadOut' })
-            .to(0.18, { scale: groupScale }, { easing: 'backOut' })
-            .delay(1.1)
-            .union()
-            .repeatForever()
-            .start();
-
-        tween(vsLogo)
-            .delay(1.2)
-            .to(0.12, { scale: vsPopScale }, { easing: 'quadOut' })
-            .to(0.18, { scale: vsScale }, { easing: 'backOut' })
-            .delay(1.0)
-            .union()
-            .repeatForever()
-            .start();
-
-        // Asymmetric flashes avoid the mechanical look of an even opacity pulse.
-        tween(thunderOpacity)
-            .delay(1.45)
-            .to(0.04, { opacity: 255 })
-            .to(0.04, { opacity: 35 })
-            .to(0.05, { opacity: 255 })
-            .to(0.06, { opacity: 80 })
-            .to(0.07, { opacity: 255 })
-            .to(0.09, { opacity: 190 })
-            .delay(0.7)
-            .union()
-            .repeatForever()
-            .start();
-
-        // Tiny, rapid distortions make the illustrated bolt feel like a strike.
-        tween(thunder)
-            .delay(1.45)
-            .to(0.06, {
-                position: v3(thunderPosition.x + 4, thunderPosition.y + 2, thunderPosition.z),
-                scale: thunderStretch,
-                angle: thunderAngle + 1.5
-            })
-            .to(0.05, {
-                position: v3(thunderPosition.x - 3, thunderPosition.y - 1, thunderPosition.z),
-                scale: thunderCompress,
-                angle: thunderAngle - 1.5
-            })
-            .to(0.07, {
-                position: v3(thunderPosition.x + 2, thunderPosition.y + 1, thunderPosition.z),
-                scale: thunderStretch,
-                angle: thunderAngle + 0.8
-            })
-            .to(0.17, {
-                position: thunderPosition,
-                scale: thunderScale,
-                angle: thunderAngle
-            }, { easing: 'backOut' })
-            .delay(0.7)
-            .union()
-            .repeatForever()
             .start();
     }
 
@@ -798,7 +775,12 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
 
     private startGameplay() {
         if (GridController.isIntroPlaying || GridController.hasGameStarted) return;
+        GridController.allBoxes.forEach(box => {
+            box.animateIntroMessage(false);
+            if (box.introOverlay) box.introOverlay.active = false;
+        });
         GridController.hasGameStarted = true;
+        this.updateTurnCharacterPop();
         this.runEntrySequence();
     }
 
@@ -1140,7 +1122,8 @@ private manualStitchArc(g: Graphics, cx: number, cy: number, r: number, startDeg
     }
 
     onGridCellClicked(event: Event) {
-        if (GridController.isIntroPlaying || GridController.isGameOver || this.isSolved) return;
+        if (GridController.isIntroPlaying || GridController.isGameOver || this.isSolved ||
+            GridController.isGrannyTurn || GridController.isMoveInProgress) return;
         // --- NEW: Track User Taps ---
         this.checkTapProgress();
 
@@ -1299,7 +1282,8 @@ private manualStitchArc(g: Graphics, cx: number, cy: number, r: number, startDeg
     }
 
     onMenuItemClicked(event: Event) {
-        if (GridController.isIntroPlaying || GridController.isGameOver) return;
+        if (GridController.isIntroPlaying || GridController.isGameOver || this.isSolved ||
+            GridController.isGrannyTurn || GridController.isMoveInProgress) return;
         event.propagationStopped = true;
         this.checkTapProgress(); 
 
@@ -1343,6 +1327,8 @@ private manualStitchArc(g: Graphics, cx: number, cy: number, r: number, startDeg
     }
 
    private handleSuccessMove(itemNode: Node) {
+    if (GridController.isGameOver || this.isSolved || GridController.isMoveInProgress) return;
+    GridController.isMoveInProgress = true;
     this.hideTutorialElements("Match Success");
     if (this.winMatchClip && GridController.fxSource) {
         GridController.fxSource.playOneShot(this.winMatchClip, 1);
@@ -1397,6 +1383,10 @@ private manualStitchArc(g: Graphics, cx: number, cy: number, r: number, startDeg
             tween().to(0.55, { worldPosition: endPos }, { easing: 'cubicOut' }),
             tween().to(0.55, { scale: finalScale }, { easing: 'elasticOut' })
         ).call(() => {
+            if (GridController.isGameOver) {
+                flyNode.destroy();
+                return;
+            }
             this.hideSelectedFrame();
             this.isSolved = true;
             flyNode.name = "PlacedItem";
@@ -1412,15 +1402,95 @@ private manualStitchArc(g: Graphics, cx: number, cy: number, r: number, startDeg
             GridController.matchesMade++;
             this.trackProgression();
             this.handleHintFeedback(() => {
-                this.scheduleOnce(() => {
-                    if (this.hiddenCluesToUnlock.length > 0) this.revealNewClues();
+                const finishMove = () => {
+                    if (GridController.isGameOver) return;
                     if (GridController.matchesMade >= this.totalMatchesNeeded) {
                         GridController.isTimerStarted = false;
-                        this.scheduleOnce(() => this.handleGameOver("WIN"), 0);
+                        this.handleGameOver("WIN");
+                        return;
                     }
-                }, );
+                    this.finishTurn();
+                };
+                if (this.hiddenCluesToUnlock.length > 0) this.revealNewClues(finishMove);
+                else finishMove();
             });
         }).start();
+    }
+
+    private finishTurn() {
+        GridController.isMoveInProgress = false;
+        GridController.idleTimer = 0;
+        if (GridController.isGrannyTurn) {
+            GridController.isGrannyTurn = false;
+            this.updateTurnCharacterPop();
+            this.playNextAvailableVoice();
+            return;
+        }
+
+        GridController.isGrannyTurn = true;
+        this.updateTurnCharacterPop();
+        // Give the player time to notice Granny's turn before showing her choices.
+        this.scheduleOnce(this.playGrannyTurn, 1.3);
+    }
+
+    private updateTurnCharacterPop() {
+        const owner = GridController.allBoxes.find(box => box.getIntroCharacters().length === 2);
+        if (!owner) return;
+        const characters = owner.getIntroCharacters();
+        characters.forEach(character => {
+            if (!owner.turnCharacterScales.has(character)) {
+                owner.turnCharacterScales.set(character, character.scale.clone());
+            }
+            Tween.stopAllByTarget(character);
+            character.setScale(owner.turnCharacterScales.get(character)!);
+        });
+        if (GridController.isGameOver) return;
+
+        const activeCharacter = characters[GridController.isGrannyTurn ? 0 : 1];
+        const baseScale = owner.turnCharacterScales.get(activeCharacter)!;
+        const popScale = v3(baseScale.x * 1.08, baseScale.y * 1.08, baseScale.z);
+        tween(activeCharacter)
+            .to(0.18, { scale: popScale }, { easing: 'quadOut' })
+            .to(0.25, { scale: baseScale }, { easing: 'backOut' })
+            .delay(0.45)
+            .union()
+            .repeatForever()
+            .start();
+    }
+
+    private playGrannyTurn() {
+        if (GridController.isGameOver || !GridController.isGrannyTurn) return;
+        const candidates = GridController.allBoxes.filter(box => {
+            const item = box.selectionMenu?.getChildByName(box.correctItemName);
+            return box.node.activeInHierarchy && !box.isSolved && item &&
+                !box.isMenuItemCompleted(item) && item.getComponent(Sprite) && item.getComponent(UITransform);
+        });
+        const availableClues = candidates.filter(box => box.associatedHint?.activeInHierarchy);
+        const choices = availableClues.length > 0 ? availableClues : candidates;
+        const box = choices[Math.floor(Math.random() * choices.length)];
+        if (!box) {
+            GridController.isGrannyTurn = false;
+            this.updateTurnCharacterPop();
+            console.warn('[GRANNY] No remaining correct item is available. Returning to player.');
+            return;
+        }
+
+        box.hideTutorialElements('Granny Turn');
+        box.refreshSelectionMenuItems();
+        const canvas = director.getScene()?.getChildByName('Canvas');
+        if (canvas) {
+            box.selectionMenu.parent = canvas;
+            box.selectionMenu.setSiblingIndex(canvas.children.length - 1);
+        }
+        box.selectionMenu.active = true;
+        box.selectionMenu.setScale(box.originalSelectionMenuScale);
+        box.positionSelectionMenuNearGridCell();
+        GridController.activeBox = box;
+        box.scheduleOnce(() => {
+            if (GridController.isGameOver || !GridController.isGrannyTurn) return;
+            const item = box.selectionMenu.getChildByName(box.correctItemName);
+            if (item) box.handleSuccessMove(item);
+        }, 1.2);
     }
 
     private trackProgression() {
@@ -1514,11 +1584,15 @@ private manualStitchArc(g: Graphics, cx: number, cy: number, r: number, startDeg
         return this.originalHintScale.clone();
     }
 
-private revealNewClues() {
-    if (!this.hiddenCluesToUnlock || this.hiddenCluesToUnlock.length === 0) return;
+private revealNewClues(onComplete?: () => void) {
+    if (!this.hiddenCluesToUnlock || this.hiddenCluesToUnlock.length === 0) {
+        onComplete?.();
+        return;
+    }
     const revealingClues = this.hiddenCluesToUnlock.filter(clue => clue?.isValid);
     if (revealingClues.length === 0) {
         this.hiddenCluesToUnlock = [];
+        onComplete?.();
         return;
     }
 
@@ -1530,6 +1604,7 @@ private revealNewClues() {
     });
 
     this.repositionHints(new Set(revealingClues), () => {
+        let pendingReveals = revealingClues.length;
         revealingClues.forEach((realClue, index) => {
             const finalPos = realClue.worldPosition.clone();
             const targetScale = this.getHintRevealScale(realClue);
@@ -1562,6 +1637,8 @@ private revealNewClues() {
                             this.playNextAvailableVoice();
                         }
                     }
+                    pendingReveals--;
+                    if (pendingReveals === 0) onComplete?.();
                 })
                 .start();
         });
@@ -1729,6 +1806,7 @@ private executeVoiceCall() {
         if (GridController.isGameOver) return;
         Analytics.instance?.dispatchEvent(reason === "WIN" ? analyticsEvents.CHALLENGE_SOLVED : analyticsEvents.CHALLENGE_FAILED);
         GridController.isGameOver = true;
+        this.updateTurnCharacterPop();
         GridController.isTimerStarted = false;
         if (GridController.bgmSource) GridController.bgmSource.stop();
         if (GridController.fxSource) GridController.fxSource.stop();
@@ -1878,9 +1956,22 @@ private repositionHints(skipOpacityFade: Set<Node> = new Set(), onComplete?: Fun
         return;
     }
     
-    // The container's child order defines the slot order. Each slot position is
-    // captured from the scene before gameplay moves any hint.
+    // Keep the authored spacing, but center the remaining cards within the container.
     const sceneSlots = hintContainer.children.map(hint => this.getHintOriginalPosition(hint));
+    const getWidth = (hint: Node) => (hint.getComponent(UITransform)?.contentSize.width || 0) *
+        Math.abs(this.getHintOriginalScale(hint).x);
+    const firstHints = hintContainer.children;
+    const authoredGap = sceneSlots.length > 1
+        ? Math.max(0, Math.abs(sceneSlots[1].x - sceneSlots[0].x) -
+            (getWidth(firstHints[0]) + getWidth(firstHints[1])) / 2)
+        : 0;
+    const containerTransform = hintContainer.getComponent(UITransform);
+    const centerX = containerTransform
+        ? (0.5 - containerTransform.anchorPoint.x) * containerTransform.contentSize.width
+        : 0;
+    const widths = activeHints.map(getWidth);
+    const totalWidth = widths.reduce((sum, width) => sum + width, 0) + authoredGap * (activeHints.length - 1);
+    let leftX = centerX - totalWidth / 2;
 
     // --- ANIMATION EXECUTION ---
     let pendingMoves = activeHints.length;
@@ -1891,7 +1982,10 @@ private repositionHints(skipOpacityFade: Set<Node> = new Set(), onComplete?: Fun
 
     activeHints.forEach((h, index) => {
         const targetScale = this.getHintOriginalScale(h);
-        const targetPosition = sceneSlots[index] || this.getHintOriginalPosition(h);
+        const targetPosition = (sceneSlots[index] || this.getHintOriginalPosition(h)).clone();
+        const anchorX = h.getComponent(UITransform)?.anchorPoint.x ?? 0.5;
+        targetPosition.x = leftX + widths[index] * anchorX;
+        leftX += widths[index] + authoredGap;
 
         // --- SMOOTH REPOSITIONING ---
         // 1. Stop previous animations to prevent "fighting" tweens
@@ -1956,6 +2050,14 @@ private repositionHints(skipOpacityFade: Set<Node> = new Set(), onComplete?: Fun
     }
 
     onDestroy() {
+        this.animateIntroMessage(false);
+        this.turnCharacterScales.forEach((scale, character) => {
+            if (character.isValid) {
+                Tween.stopAllByTarget(character);
+                character.setScale(scale);
+            }
+        });
+        this.turnCharacterScales.clear();
         const idx = GridController.allBoxes.indexOf(this);
         if (idx > -1) GridController.allBoxes.splice(idx, 1);
         if (GridController.timerMaster === this) GridController.timerMaster = null;
