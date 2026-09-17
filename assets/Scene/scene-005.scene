@@ -2276,6 +2276,7 @@
     "introGranny": null,
     "introLady": null,
     "introOverlay": null,
+    "introMessageLabel": null,
     "correctItemName": "2",
     "heartSprites": [
       {
@@ -5984,6 +5985,7 @@
     "introGranny": null,
     "introLady": null,
     "introOverlay": null,
+    "introMessageLabel": null,
     "correctItemName": "3",
     "heartSprites": [
       {
@@ -10756,6 +10758,7 @@
     "introGranny": null,
     "introLady": null,
     "introOverlay": null,
+    "introMessageLabel": null,
     "correctItemName": "4",
     "heartSprites": [
       {
@@ -12452,6 +12455,7 @@
     "introGranny": null,
     "introLady": null,
     "introOverlay": null,
+    "introMessageLabel": null,
     "correctItemName": "5",
     "heartSprites": [
       {
@@ -14145,6 +14149,7 @@
     "introGranny": null,
     "introLady": null,
     "introOverlay": null,
+    "introMessageLabel": null,
     "correctItemName": "6",
     "heartSprites": [
       {
@@ -18060,7 +18065,7 @@
       "__id__": 467
     },
     "_children": [],
-    "_active": true,
+    "_active": false,
     "_components": [
       {
         "__id__": 469

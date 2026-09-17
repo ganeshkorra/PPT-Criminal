@@ -37,7 +37,7 @@ export class GridController extends Component {
     @property({ type: Node, tooltip: 'Active during the intro; hidden once the intro returns to its original position.' })
     introOverlay: Node = null!;
 
-    @property({ type: Label, tooltip: 'Intro text that loops a fade-in and small pop.' })
+    @property({ type: Label, tooltip: 'Intro text that fades in once and loops a small pop.' })
     introMessageLabel: Label = null!;
 
     private introMessageScale: Vec3 | null = null;
@@ -66,9 +66,7 @@ export class GridController extends Component {
         opacity.opacity = this.introMessageOpacity * 0.25;
         tween(opacity)
             .to(0.35, { opacity: this.introMessageOpacity }, { easing: 'quadOut' })
-            .delay(0.35)
-            .to(0.3, { opacity: this.introMessageOpacity * 0.25 }, { easing: 'quadIn' })
-            .union().repeatForever().start();
+            .start();
     }
 
     @property(String)
@@ -406,6 +404,7 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
 
 
     start() {
+        if (this.introMessageLabel) this.introMessageLabel.node.active = false;
         // Fire LOADED → DISPLAYED sequence when game first loads (only once)
         if (GridController.allBoxes.length === 0) {
             GridController.completedItemNames.clear();
@@ -630,7 +629,8 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
 
         GridController.isIntroPlaying = true;
         if (this.introOverlay) this.introOverlay.active = true;
-        this.animateIntroMessage(true);
+        this.animateIntroMessage(false);
+        if (this.introMessageLabel) this.introMessageLabel.node.active = false;
         this.introContainer.active = true;
         const table = this.introContainer.getChildByName("Table") || this.introContainer.children[0] || null;
         const vsLogo = this.introContainer.getChildByName("VS") || this.introContainer.children[1] || null;
@@ -690,6 +690,8 @@ highlightBar: ProgressBar = null!; // Link this to the 'Highlight Text' node in 
                         .to(0.16, { scale: v3(originalScale.x * 1.05, originalScale.y * 1.05, originalScale.z) }, { easing: 'quadOut' })
                         .to(0.16, { scale: originalScale }, { easing: 'quadIn' })
                         .call(() => {
+                            if (this.introMessageLabel) this.introMessageLabel.node.active = true;
+                            this.animateIntroMessage(true);
                             revealChild(vsLogo, vsScale, 0.32, () => {
                                 revealChild(thunder, thunderScale, 0.36, () => {
                                     const thunderOpacity = thunder.getComponent(UIOpacity)!;
